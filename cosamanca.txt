@@ -1,0 +1,15 @@
+## 1
+ogni tanto si sfasa e non capisco il motivo
+## 2
+problema del context switch, si perde sempre il primo
+## 3
+posso provare a stoppare il processo durante l'aggiornamento della mappa?
+
+
+
+
+))prova scrittuta su memoria con malloc , e non su file
+))esiste un modo preciso per avere il tempo della syscall? (non mi sembra)
+))problema bpfloop 10000
+))devi salvare tempo di inizio e fine di ogni processo 
+))fai tante prove per approssimare una soluzione ( wait e dimensione mappa ) ottimale
