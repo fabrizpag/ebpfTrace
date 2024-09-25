@@ -276,12 +276,8 @@ int handle_sys_exit_pwrite64(void *params)
 
     return 0;
 }
-
-
-
-###########################################################################
-SEC("tp/syscalls/sys_enter_pwrite64")  
-int handle_sys_enter_pwrite64(void *params)
+SEC("tp/syscalls/sys_enter_pread64")  
+int handle_sys_enter_pread64(void *params)
 {
     u64 timestamp1 = bpf_ktime_get_ns();
     unsigned int tkey0 = 0, tkey1 = 1, tkey2=2;
@@ -353,7 +349,7 @@ int handle_sys_enter_pwrite64(void *params)
             bpf_map_update_elem(&timer_map_enter,&tkey0,&mts,BPF_ANY);
 
             mts2.PID=pid;
-            mts2.syscallType=SYS_TYPE_PWRITE64;
+            mts2.syscallType=SYS_TYPE_PREAD64;
             mts2.timer=timestamp;
             bpf_map_update_elem(&timer_map_enter,&tkey1,&mts2,BPF_ANY);
             u32 keyToPrint = (u32)tkey1;
@@ -372,7 +368,7 @@ int handle_sys_enter_pwrite64(void *params)
             bpf_map_update_elem(&timer_map_enter,&tkey0,&mts,BPF_ANY);
 
             mts2.PID=pid;
-            mts2.syscallType=SYS_TYPE_PWRITE64;
+            mts2.syscallType=SYS_TYPE_PREAD64;
             mts2.timer=timestamp;
             bpf_map_update_elem(&timer_map_enter,&newIndex,&mts2,BPF_ANY);
             
@@ -395,8 +391,8 @@ int handle_sys_enter_pwrite64(void *params)
 
     return 0;
 }
-SEC("tp/syscalls/sys_exit_pwrite64")
-int handle_sys_exit_pwrite64(void *params)
+SEC("tp/syscalls/sys_exit_pread64")
+int handle_sys_exit_pread64(void *params)
 {
     u64 timestamp1 = bpf_ktime_get_ns();
     unsigned int tkey0 = 0, tkey1 = 1, tkey2=2, tkey3=3;
@@ -516,7 +512,7 @@ int handle_sys_exit_pwrite64(void *params)
             bpf_map_update_elem(&timer_map_exit,&tkey0,&mts,BPF_ANY);
 
             mts2.PID=pid;
-            mts2.syscallType=SYS_TYPE_PWRITE64;
+            mts2.syscallType=SYS_TYPE_PREAD64;
             mts2.timer=timestamp;
             bpf_map_update_elem(&timer_map_exit,&tkey1,&mts2,BPF_ANY);
             
@@ -534,7 +530,561 @@ int handle_sys_exit_pwrite64(void *params)
             bpf_map_update_elem(&timer_map_exit,&tkey0,&mts,BPF_ANY);
 
             mts2.PID=pid;
-            mts2.syscallType=SYS_TYPE_PWRITE64;
+            mts2.syscallType=SYS_TYPE_PREAD64;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_exit,&newIndex,&mts2,BPF_ANY);
+
+            u32 keyToPrint = (u32)newIndex;
+            //const char fmt_str1[] = "dentro exit write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);
+
+        }
+
+        //unlock
+
+        //azzera l'internal block
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey1); //Semaphore_map[1] semaforo exit write
+        if(sem != NULL){
+            sem->internalBlock =0;
+            bpf_map_update_elem(&Semaphore_map,&tkey1,sem,BPF_ANY); //Semaphore_map[1] semaforo exit write
+        }
+        
+    }
+
+    return 0;
+}
+SEC("tp/syscalls/sys_enter_write")  
+int handle_sys_enter_write(void *params)
+{
+    u64 timestamp1 = bpf_ktime_get_ns();
+    unsigned int tkey0 = 0, tkey1 = 1, tkey2=2;
+    unsigned int tempPIDkey=0;
+    bool trovato = false;
+    semaforo *sem; 
+    semaforo newSem;
+    newSem.internalBlock=1;
+    pidStop *tempPIDelem;
+
+    // il filtraggio dei PID
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pidu32 = pid_tgid & 0xFFFFFFFF;
+    unsigned int pid = (unsigned int)pidu32;
+    pidStop *firstPIDelem = bpf_map_lookup_elem(&PIDs_map, &tkey0);
+    unsigned int *externBlock = bpf_map_lookup_elem(&utility_map,&tkey1); //utility_map[1] externBlock write
+
+    if( (firstPIDelem == NULL) || (firstPIDelem->PID == 0) ||(externBlock == NULL) || (*externBlock == 1)  ){
+        ;      // mappa vuota / errore / extern block   
+    }else{
+        // cerco se il PID è presente nella PIDs_map
+        tempPIDkey=1;
+        bpf_repeat(100){
+            tempPIDelem = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+            if((tempPIDelem == NULL)||(tempPIDelem->PID == 0)){
+                break;
+            }else if(tempPIDelem->PID == pid){
+                trovato = true;
+                break;
+            }
+            tempPIDkey++;
+        }
+        
+    }
+
+    if(trovato == true){
+        // semaforo
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey0); //Semaphore_map[0] semaforo enter write
+        if(sem != NULL){
+            if(sem->internalBlock == 0){
+                bpf_map_update_elem(&Semaphore_map,&tkey0,&newSem,BPF_ANY); //Semaphore_map[0] semaforo enter write
+            }else{
+                bpf_repeat(10000){
+                    sem = bpf_map_lookup_elem(&Semaphore_map, &tkey0); //Semaphore_map[0] semaforo enter write
+                    if(sem != NULL){
+                        if(sem->internalBlock == 0){
+                            newSem.internalBlock = 1;
+                            bpf_map_update_elem(&Semaphore_map,&tkey0,&newSem,BPF_ANY); //Semaphore_map[0] semaforo enter write
+                            break;
+                        }
+                    }
+                    
+                }
+            }
+        }
+
+        u64 timestamp2 = bpf_ktime_get_ns();
+        u64 timestampdiff = timestamp2 - timestamp1;
+        u64 timestampu64 = bpf_ktime_get_ns();
+        unsigned long long int timestamp = (unsigned long long int) timestampu64;
+
+        mapTimerStruct *firstStructElem = bpf_map_lookup_elem(&timer_map_enter,&tkey0); 
+        //caso in cui la mappa è vuota
+        if((firstStructElem != NULL) && (firstStructElem->timer==0)){
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType= SYS_TYPE_KEY;
+            mts.timer=1;
+            bpf_map_update_elem(&timer_map_enter,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_WRITE;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_enter,&tkey1,&mts2,BPF_ANY);
+            u32 keyToPrint = (u32)tkey1;
+
+            //const char fmt_str1[] = "dentro enter write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);
+
+        }else if((firstStructElem != NULL) && (firstStructElem->timer!=0)){
+            unsigned long long int newIndex = firstStructElem->timer;
+            
+            newIndex++;
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType=SYS_TYPE_KEY;
+            mts.timer=newIndex;
+            bpf_map_update_elem(&timer_map_enter,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_WRITE;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_enter,&newIndex,&mts2,BPF_ANY);
+            
+            u32 keyToPrint = (u32)newIndex;
+            //const char fmt_str1[] = "dentro enter write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);
+
+            
+        }
+
+        //unlock
+        //azzera l'internal block
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey0);
+        if(sem != NULL){
+            sem->internalBlock =0;
+            bpf_map_update_elem(&Semaphore_map,&tkey0,sem,BPF_ANY); //Semaphore_map[0] semaforo enter write
+        }
+        
+    }
+
+    return 0;
+}
+SEC("tp/syscalls/sys_exit_write")
+int handle_sys_exit_write(void *params)
+{
+    u64 timestamp1 = bpf_ktime_get_ns();
+    unsigned int tkey0 = 0, tkey1 = 1, tkey2=2, tkey3=3;
+    unsigned int tempPIDkey =1;
+    bool trovato = false,pidStop_1=false;
+    semaforo *sem;
+    semaforo newSem;
+    newSem.internalBlock=1;
+    pidStop *tempPIDelem;
+
+    // il filtraggio dei PID
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pidu32 = pid_tgid & 0xFFFFFFFF;
+    unsigned int pid = (unsigned int)pidu32;
+    pidStop *firstPIDelem = bpf_map_lookup_elem(&PIDs_map, &tkey0);
+    unsigned int *externBlock = bpf_map_lookup_elem(&utility_map,&tkey1);
+    if( (firstPIDelem == NULL) || (firstPIDelem->PID == 0)||(externBlock == NULL) || (*externBlock == 1) ){
+        ;      // mappa vuota / errore
+    }else{
+        // cerco se il PID è presente nella PIDs_map
+        bpf_repeat(10){
+            
+            tempPIDelem = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+            if(tempPIDelem != NULL){
+                if(tempPIDelem->PID == 0){
+                    break;
+                }
+                if((tempPIDelem->PID == pid)&&(tempPIDelem->stop == 0)){
+                    trovato = true;
+                    break;
+                }
+                if((tempPIDelem->PID == pid)&&(tempPIDelem->stop != 0)){
+                    pidStop_1 = true;
+                    break;
+                }
+                tempPIDkey++;
+            }
+        }
+
+    }
+
+    if(pidStop_1 == true){
+        const char a0[] = "nuovo check";
+        bpf_trace_printk(a0, sizeof(a0));
+        //il pidStop è impostato a 1, questo significa che è la prima exit del PID
+        //controllo se per lo stesso PID esiste una entry corrispondente nella enter
+        mapTimerStruct *structElem = bpf_map_lookup_elem(&timer_map_enter,&tkey0); 
+        if(structElem != NULL){
+
+            //se il primo elemento della enter è stato già inserito
+            if(structElem->timer != 0){
+                unsigned int tempCount=1;
+                //cerco elementi nella enter fino a trovarne uno che abbia il pid corrispondente
+                bpf_repeat(20){
+                    structElem = bpf_map_lookup_elem(&timer_map_enter,&tempCount);
+                    if(structElem != NULL){
+                        if(structElem->timer == 0){
+                            break;
+                        }
+                        if(structElem->PID == pid){
+                            trovato = true;
+                        }
+                    }
+                }
+                //trovato = true;
+                //settaggio stop del pidStop a 0 
+                tempPIDelem = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+                if(tempPIDelem != NULL){
+                    if(tempPIDelem->stop != 0){
+                        const char a1[] = "dentro enter settaggio del pidstop da 1 a 0";
+                        bpf_trace_printk(a1, sizeof(a1));
+                        pidStop psBuffer;
+                        psBuffer.PID=tempPIDelem->PID;
+                        psBuffer.stop=0;
+                        bpf_map_update_elem(&PIDs_map,&tempPIDkey,&psBuffer,BPF_ANY);
+
+                    }
+                }
+            }
+        }
+
+    }
+    if(trovato == true){
+
+        // semaforo
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey1); //Semaphore_map[1] semaforo exit write
+        if(sem != NULL){
+            if(sem->internalBlock == 0){
+                bpf_map_update_elem(&Semaphore_map,&tkey1,&newSem,BPF_ANY); //Semaphore_map[1] semaforo exit write
+            }else{
+                bpf_repeat(10000){
+                    sem = bpf_map_lookup_elem(&Semaphore_map, &tkey1); //Semaphore_map[1] semaforo exit write
+                    if(sem != NULL){
+                        if(sem->internalBlock == 0){
+                            newSem.internalBlock = 1;
+                            bpf_map_update_elem(&Semaphore_map,&tkey1,&newSem,BPF_ANY); //Semaphore_map[1] semaforo exit write
+                            break;
+                        }
+                    }
+                    
+                }
+            }
+        }
+
+        u64 timestamp2 = bpf_ktime_get_ns();
+        u64 timestampdiff = timestamp2 - timestamp1;
+        u64 timestampu64 = bpf_ktime_get_ns()- timestampdiff;
+        unsigned long long int timestamp = (unsigned long long int) timestampu64;
+
+        mapTimerStruct *firstStructElem = bpf_map_lookup_elem(&timer_map_exit,&tkey0); 
+        //caso in cui la mappa è vuota
+        if((firstStructElem != NULL) && (firstStructElem->timer==0) ){
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType= SYS_TYPE_KEY;
+            mts.timer=1;
+            bpf_map_update_elem(&timer_map_exit,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_WRITE;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_exit,&tkey1,&mts2,BPF_ANY);
+            
+            u32 keyToPrint = (u32)tkey1;
+            //const char fmt_str1[] = "dentro exit write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);  
+            
+        }else if((firstStructElem != NULL) && (firstStructElem->timer!=0)){
+            unsigned long long int newIndex = firstStructElem->timer;
+            newIndex++;
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType=SYS_TYPE_KEY;
+            mts.timer=newIndex;
+            bpf_map_update_elem(&timer_map_exit,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_WRITE;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_exit,&newIndex,&mts2,BPF_ANY);
+
+            u32 keyToPrint = (u32)newIndex;
+            //const char fmt_str1[] = "dentro exit write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);
+
+        }
+
+        //unlock
+
+        //azzera l'internal block
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey1); //Semaphore_map[1] semaforo exit write
+        if(sem != NULL){
+            sem->internalBlock =0;
+            bpf_map_update_elem(&Semaphore_map,&tkey1,sem,BPF_ANY); //Semaphore_map[1] semaforo exit write
+        }
+        
+    }
+
+    return 0;
+}
+SEC("tp/syscalls/sys_enter_read")  
+int handle_sys_enter_read(void *params)
+{
+    u64 timestamp1 = bpf_ktime_get_ns();
+    unsigned int tkey0 = 0, tkey1 = 1, tkey2=2;
+    unsigned int tempPIDkey=0;
+    bool trovato = false;
+    semaforo *sem; 
+    semaforo newSem;
+    newSem.internalBlock=1;
+    pidStop *tempPIDelem;
+
+    // il filtraggio dei PID
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pidu32 = pid_tgid & 0xFFFFFFFF;
+    unsigned int pid = (unsigned int)pidu32;
+    pidStop *firstPIDelem = bpf_map_lookup_elem(&PIDs_map, &tkey0);
+    unsigned int *externBlock = bpf_map_lookup_elem(&utility_map,&tkey1); //utility_map[1] externBlock write
+
+    if( (firstPIDelem == NULL) || (firstPIDelem->PID == 0) ||(externBlock == NULL) || (*externBlock == 1)  ){
+        ;      // mappa vuota / errore / extern block   
+    }else{
+        // cerco se il PID è presente nella PIDs_map
+        tempPIDkey=1;
+        bpf_repeat(100){
+            tempPIDelem = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+            if((tempPIDelem == NULL)||(tempPIDelem->PID == 0)){
+                break;
+            }else if(tempPIDelem->PID == pid){
+                trovato = true;
+                break;
+            }
+            tempPIDkey++;
+        }
+        
+    }
+
+    if(trovato == true){
+        // semaforo
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey0); //Semaphore_map[0] semaforo enter write
+        if(sem != NULL){
+            if(sem->internalBlock == 0){
+                bpf_map_update_elem(&Semaphore_map,&tkey0,&newSem,BPF_ANY); //Semaphore_map[0] semaforo enter write
+            }else{
+                bpf_repeat(10000){
+                    sem = bpf_map_lookup_elem(&Semaphore_map, &tkey0); //Semaphore_map[0] semaforo enter write
+                    if(sem != NULL){
+                        if(sem->internalBlock == 0){
+                            newSem.internalBlock = 1;
+                            bpf_map_update_elem(&Semaphore_map,&tkey0,&newSem,BPF_ANY); //Semaphore_map[0] semaforo enter write
+                            break;
+                        }
+                    }
+                    
+                }
+            }
+        }
+
+        u64 timestamp2 = bpf_ktime_get_ns();
+        u64 timestampdiff = timestamp2 - timestamp1;
+        u64 timestampu64 = bpf_ktime_get_ns();
+        unsigned long long int timestamp = (unsigned long long int) timestampu64;
+
+        mapTimerStruct *firstStructElem = bpf_map_lookup_elem(&timer_map_enter,&tkey0); 
+        //caso in cui la mappa è vuota
+        if((firstStructElem != NULL) && (firstStructElem->timer==0)){
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType= SYS_TYPE_KEY;
+            mts.timer=1;
+            bpf_map_update_elem(&timer_map_enter,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_READ;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_enter,&tkey1,&mts2,BPF_ANY);
+            u32 keyToPrint = (u32)tkey1;
+
+            //const char fmt_str1[] = "dentro enter write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);
+
+        }else if((firstStructElem != NULL) && (firstStructElem->timer!=0)){
+            unsigned long long int newIndex = firstStructElem->timer;
+            
+            newIndex++;
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType=SYS_TYPE_KEY;
+            mts.timer=newIndex;
+            bpf_map_update_elem(&timer_map_enter,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_READ;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_enter,&newIndex,&mts2,BPF_ANY);
+            
+            u32 keyToPrint = (u32)newIndex;
+            //const char fmt_str1[] = "dentro enter write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);
+
+            
+        }
+
+        //unlock
+        //azzera l'internal block
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey0);
+        if(sem != NULL){
+            sem->internalBlock =0;
+            bpf_map_update_elem(&Semaphore_map,&tkey0,sem,BPF_ANY); //Semaphore_map[0] semaforo enter write
+        }
+        
+    }
+
+    return 0;
+}
+SEC("tp/syscalls/sys_exit_read")
+int handle_sys_exit_read(void *params)
+{
+    u64 timestamp1 = bpf_ktime_get_ns();
+    unsigned int tkey0 = 0, tkey1 = 1, tkey2=2, tkey3=3;
+    unsigned int tempPIDkey =1;
+    bool trovato = false,pidStop_1=false;
+    semaforo *sem;
+    semaforo newSem;
+    newSem.internalBlock=1;
+    pidStop *tempPIDelem;
+
+    // il filtraggio dei PID
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pidu32 = pid_tgid & 0xFFFFFFFF;
+    unsigned int pid = (unsigned int)pidu32;
+    pidStop *firstPIDelem = bpf_map_lookup_elem(&PIDs_map, &tkey0);
+    unsigned int *externBlock = bpf_map_lookup_elem(&utility_map,&tkey1);
+    if( (firstPIDelem == NULL) || (firstPIDelem->PID == 0)||(externBlock == NULL) || (*externBlock == 1) ){
+        ;      // mappa vuota / errore
+    }else{
+        // cerco se il PID è presente nella PIDs_map
+        bpf_repeat(10){
+            
+            tempPIDelem = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+            if(tempPIDelem != NULL){
+                if(tempPIDelem->PID == 0){
+                    break;
+                }
+                if((tempPIDelem->PID == pid)&&(tempPIDelem->stop == 0)){
+                    trovato = true;
+                    break;
+                }
+                if((tempPIDelem->PID == pid)&&(tempPIDelem->stop != 0)){
+                    pidStop_1 = true;
+                    break;
+                }
+                tempPIDkey++;
+            }
+        }
+
+    }
+
+    if(pidStop_1 == true){
+        const char a0[] = "nuovo check";
+        bpf_trace_printk(a0, sizeof(a0));
+        //il pidStop è impostato a 1, questo significa che è la prima exit del PID
+        //controllo se per lo stesso PID esiste una entry corrispondente nella enter
+        mapTimerStruct *structElem = bpf_map_lookup_elem(&timer_map_enter,&tkey0); 
+        if(structElem != NULL){
+
+            //se il primo elemento della enter è stato già inserito
+            if(structElem->timer != 0){
+                unsigned int tempCount=1;
+                //cerco elementi nella enter fino a trovarne uno che abbia il pid corrispondente
+                bpf_repeat(20){
+                    structElem = bpf_map_lookup_elem(&timer_map_enter,&tempCount);
+                    if(structElem != NULL){
+                        if(structElem->timer == 0){
+                            break;
+                        }
+                        if(structElem->PID == pid){
+                            trovato = true;
+                        }
+                    }
+                }
+                //trovato = true;
+                //settaggio stop del pidStop a 0 
+                tempPIDelem = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+                if(tempPIDelem != NULL){
+                    if(tempPIDelem->stop != 0){
+                        const char a1[] = "dentro enter settaggio del pidstop da 1 a 0";
+                        bpf_trace_printk(a1, sizeof(a1));
+                        pidStop psBuffer;
+                        psBuffer.PID=tempPIDelem->PID;
+                        psBuffer.stop=0;
+                        bpf_map_update_elem(&PIDs_map,&tempPIDkey,&psBuffer,BPF_ANY);
+
+                    }
+                }
+            }
+        }
+
+    }
+    if(trovato == true){
+
+        // semaforo
+        sem = bpf_map_lookup_elem(&Semaphore_map, &tkey1); //Semaphore_map[1] semaforo exit write
+        if(sem != NULL){
+            if(sem->internalBlock == 0){
+                bpf_map_update_elem(&Semaphore_map,&tkey1,&newSem,BPF_ANY); //Semaphore_map[1] semaforo exit write
+            }else{
+                bpf_repeat(10000){
+                    sem = bpf_map_lookup_elem(&Semaphore_map, &tkey1); //Semaphore_map[1] semaforo exit write
+                    if(sem != NULL){
+                        if(sem->internalBlock == 0){
+                            newSem.internalBlock = 1;
+                            bpf_map_update_elem(&Semaphore_map,&tkey1,&newSem,BPF_ANY); //Semaphore_map[1] semaforo exit write
+                            break;
+                        }
+                    }
+                    
+                }
+            }
+        }
+
+        u64 timestamp2 = bpf_ktime_get_ns();
+        u64 timestampdiff = timestamp2 - timestamp1;
+        u64 timestampu64 = bpf_ktime_get_ns()- timestampdiff;
+        unsigned long long int timestamp = (unsigned long long int) timestampu64;
+
+        mapTimerStruct *firstStructElem = bpf_map_lookup_elem(&timer_map_exit,&tkey0); 
+        //caso in cui la mappa è vuota
+        if((firstStructElem != NULL) && (firstStructElem->timer==0) ){
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType= SYS_TYPE_KEY;
+            mts.timer=1;
+            bpf_map_update_elem(&timer_map_exit,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_READ;
+            mts2.timer=timestamp;
+            bpf_map_update_elem(&timer_map_exit,&tkey1,&mts2,BPF_ANY);
+            
+            u32 keyToPrint = (u32)tkey1;
+            //const char fmt_str1[] = "dentro exit write, pid:%u key:%u";
+            //bpf_trace_printk(fmt_str1, sizeof(fmt_str1),pidu32,keyToPrint);  
+            
+        }else if((firstStructElem != NULL) && (firstStructElem->timer!=0)){
+            unsigned long long int newIndex = firstStructElem->timer;
+            newIndex++;
+            mapTimerStruct mts,mts2;
+            mts.PID=0;
+            mts.syscallType=SYS_TYPE_KEY;
+            mts.timer=newIndex;
+            bpf_map_update_elem(&timer_map_exit,&tkey0,&mts,BPF_ANY);
+
+            mts2.PID=pid;
+            mts2.syscallType=SYS_TYPE_READ;
             mts2.timer=timestamp;
             bpf_map_update_elem(&timer_map_exit,&newIndex,&mts2,BPF_ANY);
 

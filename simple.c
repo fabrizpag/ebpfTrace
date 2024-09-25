@@ -1,5 +1,11 @@
+////////////////     ##MY PROG##
 // ./simple /home/enrico/Desktop/bpfwrite7/writing1P0F
 // ./simple /home/enrico/Desktop/bpfwrite7/writing0P2F
+// ./simple /home/enrico/Desktop/bpfwrite7/wr1P0F
+
+////////////////     ##GZIP##
+// ./simple /bin/gzip /home/enrico/Desktop/daComprimere.txt
+// ./simple /bin/gzip /home/enrico/Desktop/book.pdf
 
 #include <sys/resource.h>
 #include "simple.skel.h"
@@ -24,6 +30,7 @@ void StampaCS(int CSfd,int fileDescr);
 bool checkFullMap(int timer_fd_enter, unsigned int fullNum );
 void block_wait( int Semaphore_fd, int utility_fd, int PidFDmap);
 void removeBlock (int utility_fd, int timerFDenter, int timerFDexit,int Semaphore_fd);
+void cancel100elem (int timer_fd_enter, int timer_fd_exit);
 
 typedef struct{
     unsigned long long int timer;
@@ -128,8 +135,14 @@ int main(int argc, char *argv[])
             pidStruct.stop = (unsigned int)1;
 			bpf_map_update_elem(PIDs_fd,&mapPid1,&pidStruct,BPF_ADD);
 
-			isOK = execlp(argv[1],progName,NULL);
-			if(isOK == -1){return 1;}
+			if(argc == 2){
+				// sto eseguendo un programma senza opzioni o argomenti
+				isOK = execlp(argv[1],progName,NULL);
+				if(isOK == -1){return 1;}
+			}else{
+				// sto eseguendo un programma con opzioni o argomenti
+				isOK = execlp(argv[1],progName,argv[2],NULL);
+			}
 		}//fine codice figlio
 		else{
 
@@ -138,7 +151,7 @@ int main(int argc, char *argv[])
 			
 			int status;
 			pid_t result;
-			bool t = false;
+			bool t = false,alreadyPrinted = false;
 			int tempcont = 0;
 			while(true){
 				
@@ -158,13 +171,13 @@ int main(int argc, char *argv[])
 							perror("Impossibile aprire il file");
 							return 1;
 						}
-
+						
 						StampaFile2(timer_fd_enter,timer_fd_exit, PIDs_fd,fd);
 						StampaCS(CS_fd,fd2);
+						alreadyPrinted = true;
 
-						////////////////////////////////////////////////////////
-						//########## NUOVA FUNZIONE DA INSERIRE CHE CANCELLA I PRIMI 100 POSTI DI ENTRAMBE LE MAPPE
-						////////////////////////////////////////////////////////
+						//CANCELLA I PRIMI 100 POSTI DI ENTRAMBE LE MAPPE PER SICUREZZA
+						cancel100elem (timer_fd_enter, timer_fd_exit);
 						removeBlock(utility_fd,timer_fd_enter,timer_fd_exit,Semaphore_fd);
 						
 					}
@@ -178,6 +191,11 @@ int main(int argc, char *argv[])
 					break;
 				}
 			}
+
+			// questa stampa viene effettuata per liberare gli ultimi dati rimasti nelle mappe che non sono stati stampati
+			StampaFile2(timer_fd_enter,timer_fd_exit, PIDs_fd,fd);
+			StampaCS(CS_fd,fd2);
+
 			printf("Il figlio ha terminato con successo.\n");
 			printf("\n\n inizia la stampa fuori dal ciclo\n\n");
 			
@@ -465,4 +483,16 @@ void StampaCS(int CSfd,int fileDescr){
 	dprintf(fileDescr,"fine\n");
 
 	return;
+}
+
+void cancel100elem (int timer_fd_enter, int timer_fd_exit){
+	mapTimerStruct m;
+	m.PID = 0;
+	m.timer = 0;
+	m.syscallType =0;
+	for(int i = 0; i< 100; i++){
+		//bpf_map_update_elem(utility_fd,&count,&externalBlock,BPF_ANY);  //sblocco externblock utility_map
+		bpf_map_update_elem(timer_fd_enter,&i,&m,BPF_ANY);
+		bpf_map_update_elem(timer_fd_exit,&i,&m,BPF_ANY);
+	}
 }

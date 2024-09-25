@@ -1,0 +1,80 @@
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+
+#define SYS_TYPE_KEY 0
+#define SYS_TYPE_PWRITE64 1
+#define SYS_TYPE_PREAD64 2
+#define SYS_TYPE_SOCKET 3
+#define SYS_TYPE_WRITE 4
+#define SYS_TYPE_READ 5
+
+// bpf_ktime_get_ns() in nanosecondi 
+// tutti bpf_repeat(100)
+
+char LICENSE[] SEC("license") = "GPL";
+//definisco la LICENSE GPL che ci permette di utilizzare il codice GPL del kernel
+typedef struct{
+    unsigned long long int timer;
+    unsigned int PID;
+    unsigned int syscallType;
+} mapTimerStruct;
+
+typedef struct  {
+    unsigned long long int timer;
+    unsigned int PIDprec;
+    unsigned int PIDpost;
+} mapCSwitchStruct;
+
+typedef struct{
+    unsigned int internalBlock;
+}semaforo;
+
+typedef struct {
+    unsigned int PID;
+    unsigned int stop;   //     0:continua   1:stop
+} pidStop;
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, unsigned int);
+    __type(value, mapTimerStruct);
+    __uint(max_entries, 2000);
+} timer_map_enter SEC(".maps"),timer_map_exit SEC(".maps");
+// [0] mapTimerStruct.timer = indice corrente dell'array   mapTimerStruct.PID=0   mapTimerStruct.syscallType=SYS_TYPE_KEY
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, unsigned int);
+    __type(value, mapCSwitchStruct);
+    __uint(max_entries, 2000);
+} Context_Switch_Map SEC(".maps");
+// [0] mapCSwitchStruct.timer = indice corrente dell'array   mapCSwitchStruct.PIDprec=0   mapCSwitchStruct.PIDpost=0
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, unsigned int);
+    __type(value, pidStop);
+    __uint(max_entries, 100);
+} PIDs_map SEC(".maps");
+// [0] indice corrente dell'array
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, unsigned int);
+    __type(value, unsigned int);
+    __uint(max_entries, 10);
+} utility_map SEC(".maps");
+// [0] PID del processo figlio di simple.c
+// [1] externBlock write
+
+
+struct {
+     __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, unsigned int);
+    __type(value, semaforo);
+    __uint(max_entries, 10);
+} Semaphore_map SEC(".maps");
+// i semafori servono per la concorrenza
+// [0] semaforo enter write
+// [1] semaforo exit write
+// [2] semaforo Context Switch

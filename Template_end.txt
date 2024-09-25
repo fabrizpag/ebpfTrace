@@ -1,0 +1,156 @@
+
+SEC("tp/sched/sched_process_fork")   // trace point attivato appena dopo che il processo figlio è stato creato
+int handle_sched_process_fork(void *params)
+{   
+    struct trace_event_raw_sched_process_fork *ctx = params;
+    unsigned int pidParent = ctx->parent_pid;
+    unsigned int pidChild = ctx->child_pid;
+    unsigned int key0=0;
+    bool trovato = false;
+    pidStop *pidStruct,newPidStruct;
+
+    // cerco se il pidParent è presente nella lista dei pid, altrimenti non fare nulla
+    unsigned int tempPIDkey=1;
+    bpf_repeat(5){
+        pidStruct = bpf_map_lookup_elem(&PIDs_map,&tempPIDkey);
+        if((pidStruct == NULL)||(pidStruct->PID == 0)){
+            break;
+        }else if(pidStruct->PID == pidParent){
+            trovato = true;
+            break;
+        }
+        tempPIDkey++;
+    }
+
+    // se pidParent è stato trovato allora aggiungo il figlio nella mappa PIDs
+    if(trovato == true){
+        pidStruct = bpf_map_lookup_elem(&PIDs_map,&key0);
+        if(pidStruct != NULL){
+            unsigned int newIndex = pidStruct->PID + 1;
+            unsigned int newPID =  pidChild;
+            newPidStruct.stop = 1;
+            newPidStruct.PID = newIndex;
+            bpf_map_update_elem(&PIDs_map,&key0,&newPidStruct,BPF_ANY);
+            newPidStruct.stop = 0;
+            newPidStruct.PID = newPID;
+            bpf_map_update_elem(&PIDs_map,&newIndex,&newPidStruct,BPF_ANY);
+        }
+        
+    }
+    return 0;
+    
+}
+
+SEC("tp/sched/sched_switch")
+int handle_sched_switch(void *ctx)
+{
+    u64 timestampu64 = bpf_ktime_get_ns();
+    unsigned long long int timestamp = (unsigned long long int) timestampu64;
+
+    struct trace_event_raw_sched_switch *args = ctx;
+    u32 prev_pid = args->prev_pid;
+    u32 next_pid = args->next_pid;
+    unsigned int PIDprec= (unsigned int)prev_pid;
+    unsigned int PIDpost= (unsigned int)next_pid;
+    
+    unsigned int key0=0,key1=1,key2=2;
+    bool prevTrovato=false,postTrovato=false;
+    semaforo *sem,newSem;
+    newSem.internalBlock=1;
+    pidStop *tempPID;
+    
+    //check se il processo switchato era presente nella lista dei pid
+    bpf_repeat(100){
+        tempPID = bpf_map_lookup_elem(&PIDs_map,&key0);
+        if((tempPID!=NULL)&&(tempPID->PID!=0)){
+            if(tempPID->PID == PIDprec){
+                prevTrovato = true;
+                break;
+            }
+            key0++;
+        }
+    }
+    key0=0;
+    //check se il processo in entrata è presente nella lista dei pid
+    bpf_repeat(100){
+        tempPID = bpf_map_lookup_elem(&PIDs_map,&key0);
+        if((tempPID!=NULL)&&(tempPID->PID!=0)){
+            if(tempPID->PID == PIDpost){
+                postTrovato = true;
+                break;
+            }
+            key0++;
+        }
+    }
+    key0=0;
+
+    if(prevTrovato || postTrovato){
+        //const char fmt_str[] = "Context switch: PID %u -> PID %u";
+        //bpf_trace_printk(fmt_str, sizeof(fmt_str), prev_pid, next_pid);
+
+        // semaforo
+        sem = bpf_map_lookup_elem(&Semaphore_map, &key2); //Semaphore_map[2] semaforo CS
+        if(sem != NULL){
+            if(sem->internalBlock == 0){
+                bpf_map_update_elem(&Semaphore_map,&key2,&newSem,BPF_ANY); //Semaphore_map[2] CS
+            }else{
+                bpf_repeat(10000){
+                    sem = bpf_map_lookup_elem(&Semaphore_map, &key2); //Semaphore_map[2] CS
+                    if(sem != NULL){
+                        if(sem->internalBlock == 0){
+                            newSem.internalBlock = 1;
+                            bpf_map_update_elem(&Semaphore_map,&key2,&newSem,BPF_ANY); //Semaphore_map[2] CS
+                            break;
+                        }
+                    }
+                    
+                }
+            }
+        }
+        mapCSwitchStruct *firstStructElem = bpf_map_lookup_elem(&Context_Switch_Map,&key0);
+        //caso in cui la mappa è vuota
+        if((firstStructElem != NULL) && (firstStructElem->timer==0) ){
+            mapCSwitchStruct mcs,mcs2;
+            mcs.timer = 1;
+            mcs.PIDpost = 0;
+            mcs.PIDprec = 0;
+            bpf_map_update_elem(&Context_Switch_Map,&key0,&mcs,BPF_ANY);
+
+            mcs2.timer=timestamp;
+            mcs2.PIDprec=PIDprec;
+            mcs2.PIDpost=PIDpost;
+            bpf_map_update_elem(&Context_Switch_Map,&key1,&mcs2,BPF_ANY);
+            
+        }
+        // la mappa non è vuota
+        else if((firstStructElem != NULL) && (firstStructElem->timer!=0)){
+            unsigned long long int newIndex = firstStructElem->timer;
+            newIndex++;
+            mapCSwitchStruct mcs,mcs2;
+            mcs.PIDpost = 0;
+            mcs.PIDprec = 0;
+            mcs.timer=newIndex;
+            bpf_map_update_elem(&Context_Switch_Map,&key0,&mcs,BPF_ANY);
+
+            mcs2.PIDpost = PIDpost;
+            mcs2.PIDprec = PIDprec;
+            mcs2.timer=timestamp;
+            bpf_map_update_elem(&Context_Switch_Map,&newIndex,&mcs2,BPF_ANY);
+
+
+        }
+
+        //unlock
+        //azzera l'internal block
+        newSem.internalBlock =0;
+        bpf_map_update_elem(&Semaphore_map,&key2,&newSem,BPF_ANY); //Semaphore_map[2] semaforo context Switch
+        
+        
+    }
+    
+    
+   return 0;
+}
+
+
+

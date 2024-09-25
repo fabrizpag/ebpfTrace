@@ -2,15 +2,32 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define POSITION_WRITE 0
-#define POSITION_READ 1
-#define POSITION_OPEN 2
-#define POSITION_EXECVE 3
-#define POSITION_DUP 4
-#define POSITION_LINK 5
-#define POSITION_LSEEK 6
-#define POSITION_PIPE 7
+
 #define MAX_SYSCALLS 8
+
+void append_to_file(const char* destination, const char* source) {
+    FILE *src, *dest;
+    char buffer[1024];
+
+    src = fopen(source, "r");
+    if (src == NULL) {
+        perror("Errore durante l'apertura del file sorgente");
+        exit(EXIT_FAILURE);
+    }
+
+    dest = fopen(destination, "a");
+    if (dest == NULL) {
+        perror("Errore durante l'apertura del file di destinazione");
+        fclose(src);
+        exit(EXIT_FAILURE);
+    }
+
+    while (fgets(buffer, sizeof(buffer), src) != NULL) {
+        fputs(buffer, dest);
+    }
+    fclose(src);
+    fclose(dest);
+}
 
 void parse_input(const char *input, int result[]) {
     // Inizializza tutti i valori di result a 0
@@ -98,18 +115,41 @@ void copy_and_replace(const char *input_file, const char *output_file, int sysTy
     file_content[file_size] = '\0';
     fclose(file1);
 
+    char *modified_content;
+    char *modified_content2;
+    char *final_content;
     switch (sysType) {
         case 1:
-            printf("Il numero è 1.\n");
-            break; // Uscita dal case
+            // sysType 1 SYS_TYPE_PWRITE64
+            modified_content = replace_all(file_content, "$%%", "sys_enter_pwrite64");
+            modified_content2 = replace_all(modified_content, "%$%", "SYS_TYPE_PWRITE64");
+            final_content = replace_all(modified_content2, "%%$", "sys_exit_pwrite64");
+            break; 
         case 2:
-            printf("Il numero è 2.\n");
+            // sysType 2 SYS_TYPE_PREAD64
+            modified_content = replace_all(file_content, "$%%", "sys_enter_pread64");
+            modified_content2 = replace_all(modified_content, "%$%", "SYS_TYPE_PREAD64");
+            final_content = replace_all(modified_content2, "%%$", "sys_exit_pread64");
+            break;
+        case 3:
+            // sysType 3 SYS_TYPE_SOCKET
+            modified_content = replace_all(file_content, "$%%", "sys_enter_socket");
+            modified_content2 = replace_all(modified_content, "%$%", "SYS_TYPE_SOCKET");
+            final_content = replace_all(modified_content2, "%%$", "sys_exit_socket");
+            break;
+        case 4:
+            // sysType 3 SYS_TYPE_SOCKET
+            modified_content = replace_all(file_content, "$%%", "sys_enter_write");
+            modified_content2 = replace_all(modified_content, "%$%", "SYS_TYPE_WRITE");
+            final_content = replace_all(modified_content2, "%%$", "sys_exit_write");
+            break;
+        case 5:
+            // sysType 3 SYS_TYPE_SOCKET
+            modified_content = replace_all(file_content, "$%%", "sys_enter_read");
+            modified_content2 = replace_all(modified_content, "%$%", "SYS_TYPE_READ");
+            final_content = replace_all(modified_content2, "%%$", "sys_exit_read");
             break;
     }
-    // Esegui direttamente le sostituzioni sul contenuto di file1.txt
-    char *modified_content = replace_all(file_content, "$%%", "sys_enter_pwrite64");
-    char *modified_content2 = replace_all(modified_content, "%$%", "SYS_TYPE_PWRITE64");
-    char *final_content = replace_all(modified_content2, "%%$", "sys_exit_pwrite64");
 
     free(modified_content);
     free(modified_content2);
@@ -133,38 +173,44 @@ void copy_and_replace(const char *input_file, const char *output_file, int sysTy
 }
 
 int main() {
-    printf("Scrivere le system call che si vogliono tracciare\n");
-    printf("Questa è la legenda:\n");
-    printf("write = 1;\n");
-    printf("read = 2;\n");
-    printf("open = 3;\n");
-    printf("execve = 4;\n");
-    printf("dup = 5;\n");
-    printf("link = 6;\n");
-    printf("lseek = 7;\n");
-    printf("pipe = 8;\n");
-    printf("Per esempio per tracciare write, open e dup bisogna scrivere: 0;2;4;\n");
-    printf("Un uso scorretto delle regole non porterà ad alcun risultato.\n");
     
+    const char* destination = "simple.bpf.c";
     char input[256];
     int result[MAX_SYSCALLS];
-    
+
+
+    printf("Scrivere le system call che si vogliono tracciare\n");
+    printf("Questa è la legenda:\n");
+    printf("pwrite = 0;\n");
+    printf("pread = 1;\n");
+    printf("socket = 2;\n");
+    printf("write = 3;\n");
+    printf("read = 4;\n");
+    printf("Per esempio per tracciare write, read e socket bisogna scrivere: 0;1;2;\n");
+    printf("Un uso scorretto delle regole non porterà ad alcun risultato.\n");
     // Legge l'input dell'utente
     if (scanf("%255s", input) != 1) {
         fprintf(stderr, "Errore nella lettura dell'input\n");
         return 1;
     }
     
-    // Processa l'input per ottenere i valori dell'array result
     parse_input(input, result);
     
-    // Stampa l'array result per verifica
-    printf("Array result:\n");
+    //scorri array result per la scrittura di enter e exit
     for (int i = 0; i < MAX_SYSCALLS; i++) {
-        printf("%d ", result[i]);
+        // posizionamento: [0]write [1]read [2]socket
+        if(result[i] == 0){
+        }
+        else{
+            printf("chiamo copy_and_replace su indice: %d ricorda 0w 1r 2s", i);
+            copy_and_replace("Template_enter_exit.txt", "sostituzione.txt", i+1);
+        }
     }
-    printf("\n");
-    copy_and_replace("Template_enter_exit.txt", "sostituzione.txt");
+    
+    //scrivi simple.bpf.c
+    append_to_file(destination, "Template_dichiarazioni.txt");
+    append_to_file(destination, "sostituzione.txt");
+    append_to_file(destination, "Template_end.txt");
     
     return 0;
 }
